@@ -70,6 +70,14 @@ def test_daily_costs(tmp_path):
     assert daily.iloc[0]["cost"] == pytest.approx(175.0)
 
 
+def test_attribution_all_includes_everything_but_excluded_types(tmp_path):
+    reader = CurReader(
+        CurConfig(path=_parquet_fixture(tmp_path), attribution="all")
+    )
+    # unrelated S3 row now counts; Tax is still an excluded line item type
+    assert reader.load()["cost"].sum() == pytest.approx(185.0)
+
+
 def test_account_filter(tmp_path):
     reader = CurReader(
         CurConfig(path=_parquet_fixture(tmp_path), account_ids=["999999999999"])

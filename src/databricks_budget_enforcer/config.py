@@ -24,6 +24,11 @@ class CurConfig(BaseModel):
     format: str = "parquet"
     #: Restrict to these payer/usage account ids (empty = all).
     account_ids: list[str] = Field(default_factory=list)
+    #: "databricks" (default): only Marketplace Databricks charges and rows
+    #: carrying Databricks-stamped tags count toward the budget.
+    #: "all": every line item counts (whole-account budgets, or testing with
+    #: a CUR that contains no Databricks spend).
+    attribution: str = "databricks"
     #: Cost-allocation tag (CUR column suffix) Databricks stamps on AWS
     #: resources it launches. Matched case-insensitively against "databricks".
     vendor_tag: str = "user_vendor"

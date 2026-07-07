@@ -227,7 +227,10 @@ class CurReader:
 
         frame = frame[keep].copy()
         frame["is_marketplace"] = self._marketplace_mask(frame)
-        attributed = frame["is_marketplace"] | self._tagged_mask(frame)
+        if self.config.attribution == "all":
+            attributed = pd.Series(True, index=frame.index)
+        else:
+            attributed = frame["is_marketplace"] | self._tagged_mask(frame)
 
         dropped = float(frame.loc[~attributed, "cost"].sum())
         result = frame[attributed].copy()
