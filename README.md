@@ -84,9 +84,14 @@ pip install git+https://github.com/tomldennison/databricks-budget-enforcer.git
 
 ## Prerequisites
 
-1. **CUR delivery** (legacy format, parquet recommended) to an S3 bucket you
-   can read — directly (`s3://…`) or through a Databricks volume
-   (`/Volumes/…`).
+1. **CUR delivery** to an S3 bucket you can read — directly (`s3://…`) or
+   through a Databricks volume (`/Volumes/…`). Both legacy CUR and CUR 2.0
+   ("standard" data export) are supported, in parquet or CSV/.csv.gz; point
+   `cur.path` at a single file or at the prefix and it is searched
+   recursively. **Create the export with daily or hourly time granularity**
+   — monthly granularity collapses each month to one date and breaks weekly
+   pacing (the reader warns if it detects this). Use *overwrite existing
+   report* delivery so re-deliveries don't double-count.
 2. **Cost-allocation tags activated** in AWS Billing for the tags Databricks
    stamps on the instances it launches (`Vendor`, `ClusterId`, `ClusterName`,
    `JobId`), so Databricks-attributed EC2/EBS spend is identifiable in the CUR.

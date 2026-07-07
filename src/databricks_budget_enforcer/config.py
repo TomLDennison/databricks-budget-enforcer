@@ -15,9 +15,12 @@ from pydantic import BaseModel, Field
 class CurConfig(BaseModel):
     """Where and how to read the AWS Cost and Usage Report."""
 
-    #: s3://bucket/prefix, /Volumes/catalog/schema/vol/prefix, or a local path.
+    #: s3://bucket/prefix, /Volumes/catalog/schema/vol/prefix, or a local
+    #: path - a single file or a directory/prefix that is searched
+    #: recursively for delivery files. Legacy CUR and CUR 2.0 (Data Exports
+    #: "standard" export) are both supported.
     path: str
-    #: "parquet" (recommended) or "csv".
+    #: "parquet" (recommended at scale) or "csv" (.csv and .csv.gz).
     format: str = "parquet"
     #: Restrict to these payer/usage account ids (empty = all).
     account_ids: list[str] = Field(default_factory=list)
