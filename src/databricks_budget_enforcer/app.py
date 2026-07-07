@@ -1,0 +1,262 @@
+"""Top-level orchestrator.
+
+Notebook / CLI entry points:
+
+    enforcer = BudgetEnforcer(config)
+    enforcer.plan()    # weekly: rebuild the allowance from the CUR
+    enforcer.check()   # hourly: track pace and (dry-run by default) throttle
+
+All external dependencies (CUR reader, system-tables source, workspace ops,
+state store) are injectable for testing.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
+
+from databricks_budget_enforcer.config import EnforcerConfig
+from databricks_budget_enforcer.enforce.engine import Decision, decide, execute
+from databricks_budget_enforcer.enforce.levers import LeverContext
+from databricks_budget_enforcer.fiscal import FiscalCalendar
+from databricks_budget_enforcer.ingest.calibrate import Calibration, calibrate
+from databricks_budget_enforcer.ingest.cur import CurReader
+from databricks_budget_enforcer.monitor.tracker import BudgetStatus, compute_status
+from databricks_budget_enforcer.planner.forecast import forecast_remaining_day
+from databricks_budget_enforcer.planner.profile import day_of_week_profile
+from databricks_budget_enforcer.planner.weekly import WeeklyPlan, build_weekly_plan
+from databricks_budget_enforcer.report import reporter
+from databricks_budget_enforcer.state.store import JsonStateStore
+from databricks_budget_enforcer.workspace import Priority
+
+log = logging.getLogger(__name__)
+
+
+@dataclass
+class CheckResult:
+    status: BudgetStatus
+    decision: Decision
+    report: str
+
+
+class BudgetEnforcer:
+    def __init__(
+        self,
+        config: EnforcerConfig,
+        ops=None,
+        usage_source=None,
+        cur_reader: CurReader | None = None,
+        state: JsonStateStore | None = None,
+    ):
+        self.config = config
+        self.calendar = FiscalCalendar(
+            fy_start_month=config.fy_start_month,
+            fy_start_day=config.fy_start_day,
+            week_start_weekday=config.week_start_weekday,
+        )
+        self.cur_reader = cur_reader or CurReader(config.cur)
+        self.state = state or JsonStateStore(config.state.path)
+        self._ops = ops
+        self._usage_source = usage_source
+
+    # -- lazy SDK wiring ---------------------------------------------------
+
+    @property
+    def ops(self):
+        if self._ops is None:
+            from databricks_budget_enforcer.workspace import SdkWorkspaceOps
+
+            self._ops = SdkWorkspaceOps(self.config.databricks)
+        return self._ops
+
+    @property
+    def usage_source(self):
+        if self._usage_source is None:
+            from databricks_budget_enforcer.ingest.dbx_usage import (
+                SystemTablesUsageSource,
+            )
+
+            self._usage_source = SystemTablesUsageSource(
+                self.ops.client, self.config.databricks.warehouse_id
+            )
+        return self._usage_source
+
+    # -- weekly planning ---------------------------------------------------
+
+    def plan(self, as_of: date | None = None) -> WeeklyPlan:
+        """Rebuild the weekly allowance and per-day targets from the CUR,
+        recalibrate the infra multiplier, persist both."""
+        as_of = as_of or datetime.now(timezone.utc).date()
+        daily = self.cur_reader.daily_costs()
+        profile = day_of_week_profile(
+            daily,
+            as_of,
+            week_start_weekday=self.config.week_start_weekday,
+            trailing_weeks=self.config.forecast.trailing_weeks,
+        )
+        plan = build_weekly_plan(
+            self.calendar, self.config.annual_budget, daily, profile, as_of
+        )
+        calibration = self._calibrate(daily, as_of)
+
+        self.state.set_plan(plan.to_dict())
+        self.state.set_calibration(calibration.__dict__)
+        self.state.append_audit(
+            "plan",
+            {
+                "week_start": plan.week_start.isoformat(),
+                "weekly_allowance": plan.weekly_allowance,
+                "multiplier": calibration.global_multiplier,
+            },
+        )
+        log.info(
+            "weekly plan: allowance $%.2f (remaining $%.2f / %.1f weeks), "
+            "multiplier %.2f",
+            plan.weekly_allowance, plan.remaining_budget, plan.remaining_weeks,
+            calibration.global_multiplier,
+        )
+        return plan
+
+    def _calibrate(self, daily, as_of: date) -> Calibration:
+        fc = self.config.forecast
+        try:
+            now = datetime.now(timezone.utc)
+            usage = self.usage_source.hourly_usage(now - timedelta(days=32), now)
+            return calibrate(
+                daily, usage, as_of,
+                default_multiplier=fc.default_infra_multiplier,
+                overrides=fc.multiplier_overrides,
+            )
+        except Exception as exc:
+            log.warning(
+                "calibration unavailable (%s); using default multiplier %.2f",
+                exc, fc.default_infra_multiplier,
+            )
+            return Calibration(
+                global_multiplier=fc.default_infra_multiplier,
+                overrides=dict(fc.multiplier_overrides),
+            )
+
+    # -- hourly check ------------------------------------------------------
+
+    def check(self, now: datetime | None = None) -> CheckResult:
+        now = now or datetime.now(timezone.utc)
+        plan = self._current_plan(now)
+        calibration = self._stored_calibration()
+        fc = self.config.forecast
+
+        window_start = now - timedelta(days=fc.trailing_days + 1)
+        usage = self.usage_source.hourly_usage(window_start, now)
+
+        meta, context = self._inventory()
+        forecasts = forecast_remaining_day(
+            usage, now, calibration,
+            trailing_days=fc.trailing_days, workload_meta=meta,
+        )
+        context.forecasts = forecasts
+
+        status = compute_status(
+            plan, usage, forecasts, now, calibration,
+            self.config.thresholds,
+            lag_hours=fc.usage_lag_hours,
+            trailing_days=fc.trailing_days,
+        )
+
+        active = self.state.get_active_actions()
+        decision = decide(status, context, active)
+        ops = None if self.config.dry_run else self.ops
+        updated = execute(decision, ops, active, self.config.dry_run)
+        self.state.set_active_actions(updated)
+
+        self.state.append_audit(
+            "check",
+            {
+                "severity": status.severity.value,
+                "pace_ratio": round(status.pace_ratio, 4),
+                "required_reduction": round(status.required_reduction_today, 2),
+                "dry_run": self.config.dry_run,
+                "actions": [a.to_dict() for a in decision.to_apply],
+                "reverts": [a.to_dict() for a in decision.to_revert],
+            },
+        )
+        report = reporter.render_status(status, decision, self.config.dry_run)
+        return CheckResult(status=status, decision=decision, report=report)
+
+    def _current_plan(self, now: datetime) -> WeeklyPlan:
+        stored = self.state.get_plan()
+        if stored:
+            plan = WeeklyPlan.from_dict(stored)
+            if plan.week_start <= now.date() < plan.week_end:
+                return plan
+        log.info("no current weekly plan for %s; building one", now.date())
+        return self.plan(as_of=now.date())
+
+    def _stored_calibration(self) -> Calibration:
+        stored = self.state.get_calibration()
+        if stored:
+            return Calibration(
+                global_multiplier=stored["global_multiplier"],
+                overrides=stored.get("overrides", {}),
+                window_days=stored.get("window_days", 0),
+            )
+        return Calibration(
+            global_multiplier=self.config.forecast.default_infra_multiplier,
+            overrides=dict(self.config.forecast.multiplier_overrides),
+        )
+
+    def _inventory(self) -> tuple[dict, LeverContext]:
+        """Workspace inventory -> (workload metadata for forecasting, lever
+        context). Priorities come from the budget-priority tag."""
+        key = self.config.priority_tag_key
+        jobs = self.ops.list_jobs()
+        warehouses = self.ops.list_warehouses()
+        clusters = self.ops.list_all_purpose_clusters()
+
+        meta: dict[tuple[str, str], tuple[str, Priority]] = {}
+        for j in jobs:
+            meta[("JOB", j.job_id)] = (j.name, Priority.from_tags(j.tags, key))
+        for w in warehouses:
+            meta[("WAREHOUSE", w.warehouse_id)] = (
+                w.name, Priority.from_tags(w.tags, key),
+            )
+        for c in clusters:
+            meta[("CLUSTER", c.cluster_id)] = (
+                c.name, Priority.from_tags(c.tags, key),
+            )
+
+        context = LeverContext(
+            levers=self.config.levers,
+            forecasts=[],
+            jobs=jobs,
+            warehouses=warehouses,
+            clusters=clusters,
+        )
+        return meta, context
+
+    # -- manual operations -------------------------------------------------
+
+    def revert_all(self) -> list[str]:
+        """Revert every active throttle immediately (live mode only)."""
+        active = self.state.get_active_actions()
+        reverted = []
+        if self.config.dry_run:
+            return [f"WOULD revert: {a.describe()}" for a in active]
+        remaining = list(active)
+        for action in active:
+            if not action.reversible:
+                continue
+            action.revert(self.ops)
+            remaining.remove(action)
+            reverted.append(action.describe())
+        self.state.set_active_actions(remaining)
+        self.state.append_audit("revert_all", {"count": len(reverted)})
+        return reverted
+
+    def status_summary(self) -> dict:
+        return {
+            "plan": self.state.get_plan(),
+            "calibration": self.state.get_calibration(),
+            "active_actions": [a.to_dict() for a in self.state.get_active_actions()],
+            "recent_audit": self.state.audit_entries(limit=20),
+        }

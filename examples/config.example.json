@@ -1,0 +1,38 @@
+{
+  "annual_budget": 1200000,
+  "dry_run": true,
+  "priority_tag_key": "budget-priority",
+  "cur": {
+    "path": "/Volumes/main/finops/cur/myorg-cur/data",
+    "format": "parquet",
+    "account_ids": ["111122223333"],
+    "vendor_tag": "user_vendor",
+    "attribution_tags": ["user_clusterid", "user_clustername", "user_jobid"]
+  },
+  "databricks": {
+    "warehouse_id": "abcdef0123456789"
+  },
+  "thresholds": {
+    "ok": 0.9,
+    "throttle": 1.0,
+    "critical": 1.3
+  },
+  "levers": {
+    "enforce_spot": true,
+    "cap_max_workers": true,
+    "warehouse_downsize": true,
+    "warehouse_autostop": true,
+    "spot_bid_reduction": true,
+    "idle_termination": true,
+    "job_pause": true
+  },
+  "forecast": {
+    "trailing_weeks": 8,
+    "trailing_days": 14,
+    "usage_lag_hours": 3,
+    "default_infra_multiplier": 1.6
+  },
+  "state": {
+    "path": "/Volumes/main/finops/budget_enforcer/state.json"
+  }
+}

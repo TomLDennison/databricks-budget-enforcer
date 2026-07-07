@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "databricks-budget-enforcer"
+version = "0.1.0"
+description = "Fixed-budget enforcement for Databricks on AWS: plan weekly spend from the AWS CUR and throttle compute to stay on pace for a fiscal-year budget."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Tom Dennison" }]
+keywords = ["databricks", "aws", "cur", "finops", "budget", "cost"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Systems Administration",
+]
+dependencies = [
+    "pandas>=2.0",
+    "pyarrow>=14.0",
+    "boto3>=1.34",
+    "databricks-sdk>=0.29",
+    "pydantic>=2.5",
+    "click>=8.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-mock>=3.12"]
+
+[project.scripts]
+dbe = "databricks_budget_enforcer.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/tomldennison/databricks-budget-enforcer"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/databricks_budget_enforcer"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

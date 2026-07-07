@@ -1,0 +1,32 @@
+{
+  "name": "budget-enforcer-weekly-plan",
+  "schedule": {
+    "quartz_cron_expression": "0 30 0 ? * Sun",
+    "timezone_id": "UTC",
+    "pause_status": "UNPAUSED"
+  },
+  "max_concurrent_runs": 1,
+  "tags": { "budget-priority": "critical" },
+  "tasks": [
+    {
+      "task_key": "weekly_plan",
+      "notebook_task": {
+        "notebook_path": "/Workspace/Shared/budget_enforcer/weekly_plan_notebook"
+      },
+      "job_cluster_key": "small"
+    }
+  ],
+  "job_clusters": [
+    {
+      "job_cluster_key": "small",
+      "new_cluster": {
+        "spark_version": "15.4.x-scala2.12",
+        "node_type_id": "m6i.large",
+        "num_workers": 0,
+        "spark_conf": { "spark.databricks.cluster.profile": "singleNode", "spark.master": "local[*]" },
+        "custom_tags": { "ResourceClass": "SingleNode", "budget-priority": "critical" },
+        "aws_attributes": { "availability": "ON_DEMAND" }
+      }
+    }
+  ]
+}
