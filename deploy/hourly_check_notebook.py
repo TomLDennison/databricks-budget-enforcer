@@ -7,7 +7,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install git+https://github.com/tomldennison/databricks-budget-enforcer.git
+# MAGIC %pip install --force-reinstall --no-deps git+https://github.com/tomldennison/databricks-budget-enforcer.git
 # MAGIC %restart_python
 
 # COMMAND ----------

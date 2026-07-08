@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "databricks-budget-enforcer"
-version = "0.1.0"
+version = "0.2.0"
 description = "Fixed-budget enforcement for Databricks on AWS: plan weekly spend from the AWS CUR and throttle compute to stay on pace for a fiscal-year budget."
 readme = "README.md"
 requires-python = ">=3.10"

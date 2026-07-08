@@ -5,4 +5,4 @@ from databricks_budget_enforcer.config import EnforcerConfig
 from databricks_budget_enforcer.app import BudgetEnforcer
 
 __all__ = ["EnforcerConfig", "BudgetEnforcer"]
-__version__ = "0.1.0"
+__version__ = "0.2.0"
