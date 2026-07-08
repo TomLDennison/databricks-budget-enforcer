@@ -160,4 +160,9 @@ class EnforcerConfig(BaseModel):
 
     @classmethod
     def from_file(cls, path: str | Path) -> "EnforcerConfig":
-        return cls.model_validate(json.loads(Path(path).read_text()))
+        data = json.loads(Path(path).read_text())
+        # Databricks base environments may ship pydantic v1 and the library
+        # installs with --no-deps there - support both majors.
+        if hasattr(cls, "model_validate"):  # pydantic v2
+            return cls.model_validate(data)
+        return cls.parse_obj(data)  # pydantic v1

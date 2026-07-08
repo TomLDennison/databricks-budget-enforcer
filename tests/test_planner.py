@@ -73,3 +73,21 @@ def test_plan_serialization_round_trip():
     assert restored.weekly_allowance == plan.weekly_allowance
     assert restored.day_targets == plan.day_targets
     assert restored.week_start == plan.week_start
+
+
+def test_config_from_file_both_pydantic_majors(tmp_path):
+    """from_file must work on pydantic v1 (Databricks base envs) and v2."""
+    import json
+
+    from databricks_budget_enforcer.config import EnforcerConfig
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({
+        "annual_budget": 500,
+        "include_dbu_invoice": True,
+        "cur": {"path": "/tmp/x", "attribution": "all"},
+    }))
+    cfg = EnforcerConfig.from_file(path)
+    assert cfg.annual_budget == 500
+    assert cfg.include_dbu_invoice is True
+    assert cfg.cur.attribution == "all"
