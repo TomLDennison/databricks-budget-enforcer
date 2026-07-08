@@ -96,9 +96,11 @@ def forecast_remaining_day(
         if dbu <= 0:
             continue
         compute_type = history.loc[of_workload, "compute_type"].mode().iat[0]
+        fallback_name = (
+            f"{workload_type.lower()}-{workload_id}" if workload_id else compute_type
+        )
         name, priority = meta.get(
-            (workload_type, workload_id),
-            (f"{workload_type.lower()}-{workload_id}", Priority.NORMAL),
+            (workload_type, workload_id), (fallback_name, Priority.NORMAL)
         )
         forecasts.append(
             WorkloadForecast(
