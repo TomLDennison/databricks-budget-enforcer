@@ -77,6 +77,9 @@ class FakeOps:
     def terminate_cluster(self, cluster_id):
         self.calls.append(("terminate_cluster", cluster_id))
 
+    def run_job_now(self, job_id):
+        self.calls.append(("run_now", job_id))
+
 
 class FakeUsageSource:
     def __init__(self, frame: pd.DataFrame):

@@ -27,7 +27,13 @@ def render_plan(plan: WeeklyPlan) -> str:
     return "\n".join(lines)
 
 
-def render_status(status: BudgetStatus, decision: Decision | None, dry_run: bool) -> str:
+def render_status(
+    status: BudgetStatus,
+    decision: Decision | None,
+    dry_run: bool,
+    queue: list | None = None,
+    released: list[str] | None = None,
+) -> str:
     lines = [
         f"# Budget check - {status.as_of:%Y-%m-%d %H:%M UTC}",
         "",
@@ -52,4 +58,13 @@ def render_status(status: BudgetStatus, decision: Decision | None, dry_run: bool
                 f"- WARNING: levers cover ${decision.solution.total_estimated_savings:,.2f} "
                 f"of the ${decision.gap:,.2f} gap"
             )
+    if released:
+        lines += ["", "## Released from deferral queue (FIFO)", ""]
+        lines += [f"- {name}" for name in released]
+    if queue:
+        lines += ["", "## Deferral queue (FIFO order)", ""]
+        lines += [
+            f"- {e.name} (est ${e.est_run_cost:,.2f}, paused {e.paused_at[:16]})"
+            for e in sorted(queue, key=lambda e: e.paused_at)
+        ]
     return "\n".join(lines)

@@ -49,10 +49,19 @@ def decide(
     severity = status.severity
 
     if severity == Severity.OK:
+        # Schedule pauses are managed by the FIFO deferral scheduler (release
+        # in pause order, gated by headroom), not blanket-reverted here.
+        from databricks_budget_enforcer.enforce.actions import JobSchedulePause
+
+        skip_kinds = {JobSchedulePause.kind} if context.levers.fifo_release else set()
         return Decision(
             severity=severity,
             gap=0.0,
-            to_revert=[a for a in active_actions if a.reversible and a.applied_at],
+            to_revert=[
+                a
+                for a in active_actions
+                if a.reversible and a.applied_at and a.kind not in skip_kinds
+            ],
         )
 
     if severity == Severity.WARN:

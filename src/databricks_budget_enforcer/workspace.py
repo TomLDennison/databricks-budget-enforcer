@@ -85,6 +85,7 @@ class WorkspaceOps(Protocol):
         max_num_clusters: int | None = None,
     ) -> None: ...
     def terminate_cluster(self, cluster_id: str) -> None: ...
+    def run_job_now(self, job_id: str) -> None: ...
 
 
 class SdkWorkspaceOps:
@@ -212,3 +213,6 @@ class SdkWorkspaceOps:
 
     def terminate_cluster(self, cluster_id: str) -> None:
         self.client.clusters.delete(cluster_id)
+
+    def run_job_now(self, job_id: str) -> None:
+        self.client.jobs.run_now(job_id=int(job_id))

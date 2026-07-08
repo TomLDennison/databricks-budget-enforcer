@@ -77,7 +77,23 @@ persisted original settings.
 | < 90% | OK | Revert active throttles |
 | 90–100% | WARN | Report only |
 | 100–130% | THROTTLE | Solver-sized: spot enforcement, worker caps, warehouse downsizing / auto-stop, spot-bid reduction, idle-cluster termination |
-| > 130% or weekly allowance exhausted | CRITICAL | Adds schedule pausing: low priority first, never `critical` |
+| > 130% or weekly allowance exhausted | CRITICAL | Adds schedule pausing: low priority first, never `critical` — paused jobs join the FIFO deferral queue |
+
+### The FIFO deferral queue
+
+Pausing a schedule answers "stop spending" — the deferral queue answers
+"then what?". Jobs paused at CRITICAL are queued **in the order they were
+paused**. On every check where pace has recovered (OK/WARN) and the day has
+dollar headroom (`day target − spent − forecast remaining`), the queue
+releases from the head: the schedule is unpaused and, by default, one
+catch-up run is triggered (`levers.release_missed_runs`). Release is strict
+FIFO — if the head job's estimated cost doesn't fit today's headroom,
+everything waits behind it, exactly like a fixed-capacity on-prem scheduler.
+Deferred work completes; it just completes when the budget says so.
+
+`levers.fifo_release: false` restores v1 behavior (blanket unpause when pace
+drops below the OK threshold). `dbe revert --live` drains the queue
+immediately.
 
 ### Priorities
 

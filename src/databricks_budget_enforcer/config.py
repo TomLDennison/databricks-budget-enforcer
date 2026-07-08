@@ -95,6 +95,15 @@ class LeverConfig(BaseModel):
     #: All-purpose clusters idle this long are terminate-eligible when throttling.
     idle_threshold_minutes: int = 30
 
+    #: Budget-paused jobs join a FIFO deferral queue instead of being
+    #: unpaused all at once: when pace recovers and the day has headroom,
+    #: they are released strictly in the order they were paused - the
+    #: on-prem scheduler behavior.
+    fifo_release: bool = True
+    #: On release, also trigger one catch-up run (jobs.run_now) for the
+    #: schedule runs the job missed while paused.
+    release_missed_runs: bool = True
+
 
 class ForecastConfig(BaseModel):
     #: Trailing complete weeks used for the day-of-week spend profile.

@@ -25,7 +25,13 @@ class JsonStateStore:
     def _load(self) -> dict:
         if self.path.exists():
             return json.loads(self.path.read_text())
-        return {"plan": None, "calibration": None, "active_actions": [], "audit": []}
+        return {
+            "plan": None,
+            "calibration": None,
+            "active_actions": [],
+            "deferral_queue": [],
+            "audit": [],
+        }
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -58,6 +64,17 @@ class JsonStateStore:
 
     def set_active_actions(self, actions: list[Action]) -> None:
         self._data["active_actions"] = [a.to_dict() for a in actions]
+        self._save()
+
+    # -- FIFO deferral queue ----------------------------------------------
+
+    def get_deferral_queue(self) -> list:
+        from databricks_budget_enforcer.enforce.scheduler import QueueEntry
+
+        return [QueueEntry.from_dict(d) for d in self._data.get("deferral_queue", [])]
+
+    def set_deferral_queue(self, queue: list) -> None:
+        self._data["deferral_queue"] = [e.to_dict() for e in queue]
         self._save()
 
     # -- audit log -------------------------------------------------------

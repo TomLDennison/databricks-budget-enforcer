@@ -13,16 +13,21 @@ state store) are injectable for testing.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 
 from databricks_budget_enforcer.config import EnforcerConfig
+from databricks_budget_enforcer.enforce import scheduler
 from databricks_budget_enforcer.enforce.engine import Decision, decide, execute
 from databricks_budget_enforcer.enforce.levers import LeverContext
 from databricks_budget_enforcer.fiscal import FiscalCalendar
 from databricks_budget_enforcer.ingest.calibrate import Calibration, calibrate
 from databricks_budget_enforcer.ingest.cur import CurReader
-from databricks_budget_enforcer.monitor.tracker import BudgetStatus, compute_status
+from databricks_budget_enforcer.monitor.tracker import (
+    BudgetStatus,
+    Severity,
+    compute_status,
+)
 from databricks_budget_enforcer.planner.forecast import forecast_remaining_day
 from databricks_budget_enforcer.planner.profile import day_of_week_profile
 from databricks_budget_enforcer.planner.weekly import WeeklyPlan, build_weekly_plan
@@ -38,6 +43,8 @@ class CheckResult:
     status: BudgetStatus
     decision: Decision
     report: str
+    #: FIFO-released jobs this check (names), in release order.
+    released: list[str] = field(default_factory=list)
 
 
 class BudgetEnforcer:
@@ -195,6 +202,15 @@ class BudgetEnforcer:
             usage, now, calibration,
             trailing_days=fc.trailing_days, workload_meta=meta,
         )
+        # Jobs sitting in the deferral queue are paused - they will not run,
+        # so their history-based forecasts must not count against today.
+        queue = self.state.get_deferral_queue()
+        queued_ids = {entry.job_id for entry in queue}
+        forecasts = [
+            f
+            for f in forecasts
+            if not (f.workload_type == "JOB" and f.workload_id in queued_ids)
+        ]
         context.forecasts = forecasts
 
         status = compute_status(
@@ -208,7 +224,17 @@ class BudgetEnforcer:
         decision = decide(status, context, active)
         ops = None if self.config.dry_run else self.ops
         updated = execute(decision, ops, active, self.config.dry_run)
+
+        # Newly applied schedule pauses join the FIFO queue.
+        for action in decision.to_apply:
+            if action.kind == "job_schedule_pause" and action.applied_at:
+                queue.append(scheduler.entry_for_pause(action))
+
+        released, queue, updated = self._release_deferred(
+            status, queue, updated
+        )
         self.state.set_active_actions(updated)
+        self.state.set_deferral_queue(queue)
 
         self.state.append_audit(
             "check",
@@ -219,10 +245,75 @@ class BudgetEnforcer:
                 "dry_run": self.config.dry_run,
                 "actions": [a.to_dict() for a in decision.to_apply],
                 "reverts": [a.to_dict() for a in decision.to_revert],
+                "released": released,
+                "deferral_queue": [e.to_dict() for e in queue],
             },
         )
-        report = reporter.render_status(status, decision, self.config.dry_run)
-        return CheckResult(status=status, decision=decision, report=report)
+        report = reporter.render_status(
+            status, decision, self.config.dry_run, queue=queue, released=released
+        )
+        return CheckResult(
+            status=status, decision=decision, report=report, released=released
+        )
+
+    def _release_deferred(self, status, queue, active):
+        """Release queued jobs strictly in pause order when pace has
+        recovered and today has dollar headroom. Returns
+        (released job names, remaining queue, updated active actions)."""
+        levers = self.config.levers
+        if (
+            not levers.fifo_release
+            or not queue
+            or status.severity not in (Severity.OK, Severity.WARN)
+        ):
+            return [], queue, active
+
+        headroom = max(
+            0.0,
+            status.day_target - status.spend_today - status.forecast_remaining_today,
+        )
+        to_release, remaining = scheduler.plan_releases(queue, headroom)
+        if not to_release:
+            log.info(
+                "deferral queue: head '%s' needs $%.2f but headroom is $%.2f - "
+                "holding %d job(s)",
+                queue[0].name, queue[0].est_run_cost, headroom, len(queue),
+            )
+            return [], queue, active
+
+        released: list[str] = []
+        for entry in to_release:
+            if self.config.dry_run:
+                log.info(
+                    "WOULD release '%s' from deferral queue (est $%.2f): "
+                    "unpause schedule%s",
+                    entry.name, entry.est_run_cost,
+                    " + trigger catch-up run" if levers.release_missed_runs else "",
+                )
+                released.append(entry.name)
+                continue
+            try:
+                self.ops.set_job_schedule_paused(entry.job_id, False)
+                if levers.release_missed_runs:
+                    self.ops.run_job_now(entry.job_id)
+                active = [
+                    a
+                    for a in active
+                    if not (
+                        a.kind == "job_schedule_pause"
+                        and a.target_id == entry.job_id
+                    )
+                ]
+                released.append(entry.name)
+                log.info("released '%s' from deferral queue", entry.name)
+            except Exception:
+                log.exception("failed to release job %s", entry.job_id)
+                remaining.insert(0, entry)
+
+        # dry-run never mutates the queue (nothing was truly paused/released)
+        if self.config.dry_run:
+            return released, queue, active
+        return released, remaining, active
 
     def _current_plan(self, now: datetime) -> WeeklyPlan:
         stored = self.state.get_plan()
@@ -278,11 +369,15 @@ class BudgetEnforcer:
     # -- manual operations -------------------------------------------------
 
     def revert_all(self) -> list[str]:
-        """Revert every active throttle immediately (live mode only)."""
+        """Revert every active throttle and drain the deferral queue
+        immediately (live mode only) - the manual escape hatch."""
         active = self.state.get_active_actions()
-        reverted = []
+        queue = self.state.get_deferral_queue()
         if self.config.dry_run:
-            return [f"WOULD revert: {a.describe()}" for a in active]
+            return [f"WOULD revert: {a.describe()}" for a in active] + [
+                f"WOULD release from deferral queue: {e.name}" for e in queue
+            ]
+        reverted = []
         remaining = list(active)
         for action in active:
             if not action.reversible:
@@ -291,7 +386,10 @@ class BudgetEnforcer:
             remaining.remove(action)
             reverted.append(action.describe())
         self.state.set_active_actions(remaining)
-        self.state.append_audit("revert_all", {"count": len(reverted)})
+        self.state.set_deferral_queue([])
+        self.state.append_audit(
+            "revert_all", {"count": len(reverted), "queue_drained": len(queue)}
+        )
         return reverted
 
     def status_summary(self) -> dict:
