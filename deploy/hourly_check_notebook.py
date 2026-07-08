@@ -31,6 +31,17 @@ displayHTML(f"<pre>{result.report}</pre>")  # noqa: F821
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ## Full analysis trail
+# MAGIC Everything the check measured, forecast, considered, and chose -
+# MAGIC including why untouchable workloads were untouchable.
+
+# COMMAND ----------
+
+displayHTML(f"<pre>{result.details}</pre>")  # noqa: F821
+
+# COMMAND ----------
+
 # Fail the job run loudly when the budget is critical so alerting fires.
 if result.status.severity.value == "CRITICAL":
     raise Exception(

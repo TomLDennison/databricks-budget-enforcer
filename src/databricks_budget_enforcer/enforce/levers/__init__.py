@@ -20,6 +20,9 @@ class LeverContext:
     #: target keys (e.g. "job_cluster_throttle:123") already throttled -
     #: levers must not emit new options for them.
     already_throttled: set[str] = field(default_factory=set)
+    #: human-readable analysis trail: why each workload was or wasn't
+    #: throttleable this check. Rendered in the detailed report.
+    notes: list[str] = field(default_factory=list)
 
     def forecast_for(self, workload_type: str, workload_id: str) -> WorkloadForecast | None:
         for f in self.forecasts:

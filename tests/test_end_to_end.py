@@ -156,6 +156,13 @@ def test_dry_run_check_detects_overspend_and_touches_nothing(enforcer):
     assert app.state.get_active_actions() == []
     assert "WOULD apply" in result.report
 
+    # the analysis trail explains the whole decision
+    assert "## Pace math" in result.details
+    assert "## Workload forecasts" in result.details
+    assert "## Lever evaluation" in result.details
+    assert "nightly-etl" in result.details
+    assert "gap: required reduction" in result.details
+
 
 def test_include_dbu_invoice_blends_ledger(tmp_path, caplog):
     """With the flag on, system-table DBU dollars join the ledger and the

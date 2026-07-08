@@ -45,6 +45,8 @@ class CheckResult:
     report: str
     #: FIFO-released jobs this check (names), in release order.
     released: list[str] = field(default_factory=list)
+    #: full analysis trail: forecasts, inventory, lever evaluation, solver
+    details: str = ""
 
 
 class BudgetEnforcer:
@@ -252,8 +254,10 @@ class BudgetEnforcer:
         report = reporter.render_status(
             status, decision, self.config.dry_run, queue=queue, released=released
         )
+        details = reporter.render_details(status, context, decision, queue=queue)
         return CheckResult(
-            status=status, decision=decision, report=report, released=released
+            status=status, decision=decision, report=report,
+            released=released, details=details,
         )
 
     def _release_deferred(self, status, queue, active):
