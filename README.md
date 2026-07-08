@@ -34,6 +34,26 @@ underneath); system tables see only DBUs but see them nearly live. Weekly
 calibration computes the **infra multiplier** (all-in ÷ DBU over a trailing
 window), so intraday DBU dollars convert to estimated all-in dollars.
 
+### Direct-invoice billing (`include_dbu_invoice`)
+
+The CUR only contains what AWS bills your account. If your organization pays
+Databricks **through AWS Marketplace**, DBU charges appear in the CUR and the
+default configuration captures everything. If Databricks bills you **by
+direct invoice** (common for negotiated contracts — and for serverless
+products), the CUR only sees the infrastructure half. Set
+
+```json
+"include_dbu_invoice": true
+```
+
+and the ledger becomes: non-Marketplace CUR costs (infra) **plus**
+`system.billing.usage` × list prices (the invoice half). Any Databricks
+Marketplace charges found in the CUR are excluded while the flag is on, so
+DBUs are never counted twice. Calibration runs against the blended ledger,
+keeping intraday estimates consistent. Note the system tables price at
+*list*; if your invoice reflects negotiated discounts, expect the ledger to
+be conservatively high.
+
 ### The throttle solver
 
 Throttle magnitudes are calculated, not fixed steps. Each hourly check:

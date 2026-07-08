@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
+from datetime import date, datetime
 from typing import Protocol
 
 import pandas as pd
@@ -36,6 +36,22 @@ WHERE lp.currency_code = 'USD'
 GROUP BY 1, 2, 3, 4, 5
 """
 
+DAILY_DBU_SQL = """
+SELECT
+  date(u.usage_start_time)                        AS usage_date,
+  SUM(u.usage_quantity * lp.pricing.effective_list.default) AS dbu_dollars
+FROM system.billing.usage u
+JOIN system.billing.list_prices lp
+  ON u.sku_name = lp.sku_name
+ AND u.cloud = lp.cloud
+ AND u.usage_start_time >= lp.price_start_time
+ AND (lp.price_end_time IS NULL OR u.usage_start_time < lp.price_end_time)
+WHERE lp.currency_code = 'USD'
+  AND u.usage_start_time >= '{start}'
+  AND u.usage_start_time <  '{end}'
+GROUP BY 1
+"""
+
 USAGE_COLUMNS = [
     "hour_start", "compute_type", "workload_type", "workload_id", "dbu_dollars",
 ]
@@ -44,6 +60,11 @@ USAGE_COLUMNS = [
 class UsageSource(Protocol):
     def hourly_usage(self, start: datetime, end: datetime) -> pd.DataFrame:
         """Hourly DBU dollars in [start, end) with columns USAGE_COLUMNS."""
+        ...
+
+    def daily_dbu_dollars(self, start: date, end: date) -> pd.DataFrame:
+        """Total DBU dollars per UTC day in [start, end): columns
+        usage_date, dbu_dollars. Used for the include_dbu_invoice ledger."""
         ...
 
 
@@ -96,6 +117,15 @@ class SystemTablesUsageSource:
         raw["hour_start"] = pd.to_datetime(raw["hour_start"], utc=True)
         raw["dbu_dollars"] = pd.to_numeric(raw["dbu_dollars"], errors="coerce").fillna(0.0)
         return classify_workloads(raw)
+
+    def daily_dbu_dollars(self, start: date, end: date) -> pd.DataFrame:
+        sql = DAILY_DBU_SQL.format(start=start.isoformat(), end=end.isoformat())
+        raw = self._query(sql)
+        if raw.empty:
+            return pd.DataFrame(columns=["usage_date", "dbu_dollars"])
+        raw["usage_date"] = pd.to_datetime(raw["usage_date"]).dt.date
+        raw["dbu_dollars"] = pd.to_numeric(raw["dbu_dollars"], errors="coerce").fillna(0.0)
+        return raw.sort_values("usage_date").reset_index(drop=True)
 
     def _query(self, sql: str) -> pd.DataFrame:
         response = self.client.statement_execution.execute_statement(

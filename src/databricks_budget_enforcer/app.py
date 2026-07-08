@@ -85,10 +85,12 @@ class BudgetEnforcer:
     # -- weekly planning ---------------------------------------------------
 
     def plan(self, as_of: date | None = None) -> WeeklyPlan:
-        """Rebuild the weekly allowance and per-day targets from the CUR,
-        recalibrate the infra multiplier, persist both."""
+        """Rebuild the weekly allowance and per-day targets from the spend
+        ledger (CUR, plus Databricks-invoiced DBU dollars when
+        include_dbu_invoice is on), recalibrate the infra multiplier,
+        persist both."""
         as_of = as_of or datetime.now(timezone.utc).date()
-        daily = self.cur_reader.daily_costs()
+        daily = self._ledger_daily_costs(as_of)
         profile = day_of_week_profile(
             daily,
             as_of,
@@ -117,6 +119,45 @@ class BudgetEnforcer:
             calibration.global_multiplier,
         )
         return plan
+
+    def _ledger_daily_costs(self, as_of: date):
+        """Daily spend ledger. Default: Databricks-attributed CUR costs.
+        With include_dbu_invoice: non-Marketplace CUR costs (the infra half)
+        plus system-table DBU dollars at list price (the invoice half) -
+        Marketplace DBU charges in the CUR are excluded so the two sources
+        never both count DBUs."""
+        loaded = self.cur_reader.load()
+        if not self.config.include_dbu_invoice:
+            return self.cur_reader.daily_costs(loaded)
+
+        import pandas as pd
+
+        marketplace_total = float(loaded.loc[loaded["is_marketplace"], "cost"].sum())
+        if marketplace_total > 0:
+            log.warning(
+                "include_dbu_invoice: excluding $%.2f of Databricks "
+                "Marketplace charges from the CUR ledger; DBU dollars are "
+                "sourced from system.billing.usage instead. If this "
+                "workspace is actually Marketplace-billed, turn the flag off.",
+                marketplace_total,
+            )
+        cur_daily = self.cur_reader.daily_costs(loaded[~loaded["is_marketplace"]])
+
+        fy_start = self.calendar.fy_start(as_of)
+        dbu_daily = self.usage_source.daily_dbu_dollars(
+            fy_start, as_of + timedelta(days=1)
+        )
+        log.info(
+            "ledger: $%.2f CUR infrastructure + $%.2f Databricks-invoice DBU",
+            cur_daily["cost"].sum(), dbu_daily["dbu_dollars"].sum(),
+        )
+        merged = pd.merge(cur_daily, dbu_daily, on="usage_date", how="outer").fillna(0.0)
+        merged["cost"] = merged["cost"] + merged["dbu_dollars"]
+        return (
+            merged[["usage_date", "cost"]]
+            .sort_values("usage_date")
+            .reset_index(drop=True)
+        )
 
     def _calibrate(self, daily, as_of: date) -> Calibration:
         fc = self.config.forecast

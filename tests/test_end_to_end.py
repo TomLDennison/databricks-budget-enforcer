@@ -157,6 +157,30 @@ def test_dry_run_check_detects_overspend_and_touches_nothing(enforcer):
     assert "WOULD apply" in result.report
 
 
+def test_include_dbu_invoice_blends_ledger(tmp_path, caplog):
+    """With the flag on, system-table DBU dollars join the ledger and the
+    CUR's Databricks Marketplace charges are excluded (no double count).
+    This fixture's CUR rows are ALL Marketplace, so FY-to-date should equal
+    the DBU history alone: 13 complete days (Jun 22 - Jul 4) x $240."""
+    config = EnforcerConfig(
+        annual_budget=79_000.0,
+        include_dbu_invoice=True,
+        cur=CurConfig(path=_cur_fixture(tmp_path)),
+        state=StateConfig(path=str(tmp_path / "state.json")),
+    )
+    app = BudgetEnforcer(
+        config, ops=FakeOps(), usage_source=FakeUsageSource(_usage_frame())
+    )
+    with caplog.at_level("WARNING"):
+        plan = app.plan(as_of=NOW.date())
+
+    assert any("Marketplace" in r.message for r in caplog.records)
+    assert plan.fy_to_date_spend == pytest.approx(13 * 240.0)
+    # blended ledger makes the multiplier (infra+DBU)/DBU = 1.0 here,
+    # since the marketplace-only CUR contributes no infra dollars
+    assert app.state.get_calibration()["global_multiplier"] == pytest.approx(1.0, rel=0.01)
+
+
 def test_check_is_repeatable(enforcer):
     app, ops = enforcer
     app.plan(as_of=NOW.date())

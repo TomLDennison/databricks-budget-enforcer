@@ -86,6 +86,12 @@ class FakeUsageSource:
         stamps = pd.to_datetime(self.frame["hour_start"], utc=True)
         return self.frame[(stamps >= start) & (stamps < end)].reset_index(drop=True)
 
+    def daily_dbu_dollars(self, start, end) -> pd.DataFrame:
+        dates = pd.to_datetime(self.frame["hour_start"], utc=True).dt.date
+        sub = self.frame[(dates >= start) & (dates < end)].copy()
+        sub["usage_date"] = dates[(dates >= start) & (dates < end)]
+        return sub.groupby("usage_date", as_index=False)["dbu_dollars"].sum()
+
 
 @pytest.fixture
 def now_utc() -> datetime:

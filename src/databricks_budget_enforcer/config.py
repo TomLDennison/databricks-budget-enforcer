@@ -130,6 +130,15 @@ class EnforcerConfig(BaseModel):
     #: Dry-run is the default: log WOULD-actions, change nothing.
     dry_run: bool = True
 
+    #: Add Databricks-invoiced DBU dollars (system.billing.usage x list
+    #: prices) to the spend ledger. For workspaces whose DBU charges are
+    #: billed directly by Databricks instead of through AWS Marketplace, the
+    #: CUR only contains the infrastructure half of the cost. When enabled,
+    #: any Databricks Marketplace charges found in the CUR are EXCLUDED from
+    #: the ledger (DBU dollars come from the system tables instead), so
+    #: nothing is double-counted.
+    include_dbu_invoice: bool = False
+
     #: Tag key on jobs/clusters/warehouses; values: critical | normal | low.
     priority_tag_key: str = "budget-priority"
 
